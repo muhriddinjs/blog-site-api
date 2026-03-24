@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from fastapi.security import OAuth2PasswordRequestForm  
 from app.core.database import get_db
 from app.core.security import (
     verify_password, create_access_token, create_refresh_token,
@@ -11,13 +12,16 @@ from app.schemas.auth import LoginRequest, TokenResponse, RefreshRequest, AdminI
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == data.email))
+async def login(
+    db: AsyncSession = Depends(get_db),
+    form_data: OAuth2PasswordRequestForm = Depends() # <--- JSON EMAS, FORM KUTAMIZ
+):
+    # form_data.username - bu aslida Swagger'dan keladigan email bo'ladi
+    result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(data.password, user.hashed_password):
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email yoki parol noto'g'ri"
@@ -65,3 +69,20 @@ async def refresh_token(data: RefreshRequest, db: AsyncSession = Depends(get_db)
 @router.get("/me", response_model=AdminInfo)
 async def get_me(current_user: User = Depends(get_current_admin)):
     return current_user
+
+
+@router.post("/change-password")
+async def change_password(
+    old_password: str,
+    new_password: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    if not verify_password(old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Eski parol noto'g'ri")
+    
+    from app.core.security import get_password_hash
+    current_user.hashed_password = get_password_hash(new_password)
+    db.add(current_user)
+    await db.commit()
+    return {"message": "Parol o'zgartirildi"}
